@@ -6,9 +6,11 @@ import android.support.v7.widget.RecyclerView;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.ImageView;
 import android.widget.TextView;
 
 import java.io.File;
+import java.util.HashMap;
 import java.util.List;
 
 import butterknife.BindView;
@@ -21,12 +23,20 @@ public class HistoryAdapter extends RecyclerView.Adapter<HistoryAdapter.ViewHist
     private final List<History> mHistoryList;
     private final Activity mActivity;
     private final OnClickListener mOnClickListener;
-
+    private final HashMap<String, Integer> mIconsOperationList;
 
     public HistoryAdapter(Activity mActivity, List<History> mHistoryList, OnClickListener mOnClickListener) {
         this.mHistoryList = mHistoryList;
         this.mActivity = mActivity;
         this.mOnClickListener = mOnClickListener;
+        mIconsOperationList = new HashMap<>();
+        mIconsOperationList.put(mActivity.getString(R.string.printed), R.drawable.ic_print_black_24dp);
+        mIconsOperationList.put(mActivity.getString(R.string.created), R.drawable.ic_insert_drive_file_black_24dp);
+        mIconsOperationList.put(mActivity.getString(R.string.deleted), R.drawable.baseline_delete_24);
+        mIconsOperationList.put(mActivity.getString(R.string.renamed), R.drawable.ic_create_black_24dp);
+        mIconsOperationList.put(mActivity.getString(R.string.rotated), R.drawable.baseline_crop_rotate_24);
+        mIconsOperationList.put(mActivity.getString(R.string.encrypted), R.drawable.ic_lock_black_24dp);
+        mIconsOperationList.put(mActivity.getString(R.string.decrypted), R.drawable.ic_lock_open_black_24dp);
     }
 
     @NonNull
@@ -60,6 +70,7 @@ public class HistoryAdapter extends RecyclerView.Adapter<HistoryAdapter.ViewHist
         holder.mFilename.setText(fileName);
         holder.mOperationDate.setText(date);
         holder.mOperationType.setText(operationType);
+        holder.mOperationImage.setImageResource(mIconsOperationList.get(operationType));
     }
 
     public void deleteHistory() {
@@ -80,6 +91,8 @@ public class HistoryAdapter extends RecyclerView.Adapter<HistoryAdapter.ViewHist
         TextView mOperationDate;
         @BindView(R.id.operationType)
         TextView mOperationType;
+        @BindView(R.id.operationImage)
+        ImageView mOperationImage;
 
         ViewHistoryHolder(View itemView) {
             super(itemView);

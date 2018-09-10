@@ -1,7 +1,6 @@
 package swati4star.createpdf.util;
 
 import android.app.Activity;
-import android.support.design.widget.Snackbar;
 import android.text.Editable;
 import android.text.TextWatcher;
 import android.view.View;
@@ -11,7 +10,6 @@ import android.widget.TextView;
 import com.afollestad.materialdialogs.DialogAction;
 import com.afollestad.materialdialogs.MaterialDialog;
 import com.itextpdf.text.DocumentException;
-import com.itextpdf.text.exceptions.BadPasswordException;
 import com.itextpdf.text.pdf.PdfReader;
 import com.itextpdf.text.pdf.PdfStamper;
 import com.itextpdf.text.pdf.PdfWriter;
@@ -24,7 +22,10 @@ import java.util.Arrays;
 import java.util.Objects;
 
 import swati4star.createpdf.R;
+import swati4star.createpdf.database.DatabaseHelper;
 import swati4star.createpdf.interfaces.DataSetChanged;
+
+import static swati4star.createpdf.util.StringUtils.showSnackbar;
 
 public class PDFEncryptionUtility {
 
@@ -32,12 +33,12 @@ public class PDFEncryptionUtility {
     private final FileUtils mFileUtils;
     private String mPassword;
 
-    final MaterialDialog dialog;
+    private final MaterialDialog mDialog;
 
     public PDFEncryptionUtility(Activity context) {
         this.mContext = context;
         this.mFileUtils = new FileUtils(context);
-        dialog = new MaterialDialog.Builder(mContext)
+        mDialog = new MaterialDialog.Builder(mContext)
                 .customView(R.layout.custom_dialog, true)
                 .positiveText(android.R.string.ok)
                 .negativeText(android.R.string.cancel)
@@ -45,17 +46,17 @@ public class PDFEncryptionUtility {
     }
 
     /**
-     * Opens the password dialog to set Password for an existing PDF file.
+     * Opens the password mDialog to set Password for an existing PDF file.
      *
      * @param filePath Path of file to be encrypted
      */
     public void setPassword(final String filePath, final DataSetChanged dataSetChanged,
                             final ArrayList<File> mFileList) {
 
-        dialog.setTitle(R.string.set_password);
-        final View mPositiveAction = dialog.getActionButton(DialogAction.POSITIVE);
-        assert dialog.getCustomView() != null;
-        EditText mPasswordInput = dialog.getCustomView().findViewById(R.id.password);
+        mDialog.setTitle(R.string.set_password);
+        final View mPositiveAction = mDialog.getActionButton(DialogAction.POSITIVE);
+        assert mDialog.getCustomView() != null;
+        EditText mPasswordInput = mDialog.getCustomView().findViewById(R.id.password);
         mPasswordInput.addTextChangedListener(
                 new TextWatcher() {
                     @Override
@@ -69,25 +70,23 @@ public class PDFEncryptionUtility {
                     @Override
                     public void afterTextChanged(Editable input) {
                         if (StringUtils.isEmpty(input))
-                            showSnackbar(R.string.snackbar_password_cannot_be_blank);
+                            showSnackbar(mContext, R.string.snackbar_password_cannot_be_blank);
                         else
                             mPassword = input.toString();
                     }
                 });
-        dialog.show();
+        mDialog.show();
         mPositiveAction.setEnabled(false);
         mPositiveAction.setOnClickListener(v -> {
             try {
                 doEncryption(filePath, mPassword, mFileList);
                 dataSetChanged.updateDataset();
-                showSnackbar(R.string.password_added);
-            } catch (BadPasswordException e) {
-                e.printStackTrace();
-                showSnackbar(R.string.cannot_add_password);
+                showSnackbar(mContext, R.string.password_added);
             } catch (IOException | DocumentException e) {
                 e.printStackTrace();
+                showSnackbar(mContext, R.string.cannot_add_password);
             }
-            dialog.dismiss();
+            mDialog.dismiss();
         });
     }
 
@@ -102,9 +101,9 @@ public class PDFEncryptionUtility {
                                 final ArrayList<File> mFileList) throws IOException, DocumentException {
         String finalOutputFile = path.replace(mContext.getString(R.string.pdf_ext),
                 mContext.getString(R.string.encrypted_file));
-
-        if (mFileUtils.isFileExist(finalOutputFile)) {
-            int append = FileUtils.checkRepeat(finalOutputFile, mFileList);
+        File file = new File(finalOutputFile);
+        if (mFileUtils.isFileExist(file.getName())) {
+            int append = mFileUtils.checkRepeat(finalOutputFile, mFileList);
             finalOutputFile = finalOutputFile.replace(mContext.getString(R.string.pdf_ext),
                     append + mContext.getResources().getString(R.string.pdf_ext));
         }
@@ -115,6 +114,7 @@ public class PDFEncryptionUtility {
                 PdfWriter.ALLOW_PRINTING | PdfWriter.ALLOW_COPY, PdfWriter.ENCRYPTION_AES_128);
         stamper.close();
         reader.close();
+        new DatabaseHelper(mContext).insertRecord(finalOutputFile, mContext.getString(R.string.encrypted));
         return finalOutputFile;
     }
 
@@ -124,15 +124,17 @@ public class PDFEncryptionUtility {
      * @return true, if PDF is encrypted, otherwise false
      */
     private boolean isPDFEncrypted(final String file) {
-        PdfReader reader = null;
+        PdfReader reader;
+        String ownerPass = mContext.getString(R.string.app_name);
         try {
-            reader = new PdfReader(file, mContext.getString(R.string.app_name).getBytes());
+            reader = new PdfReader(file, ownerPass.getBytes());
         } catch (IOException e) {
             e.printStackTrace();
+            return true;
         }
         //Check if PDF is encrypted or not.
         if (!reader.isEncrypted()) {
-            showSnackbar(R.string.not_encrypted);
+            showSnackbar(mContext, R.string.not_encrypted);
             return false;
         }
         return true;
@@ -151,10 +153,10 @@ public class PDFEncryptionUtility {
             return;
 
         final String[] input_password = new String[1];
-        dialog.setTitle(R.string.enter_password);
-        final View mPositiveAction = dialog.getActionButton(DialogAction.POSITIVE);
-        final EditText mPasswordInput = dialog.getCustomView().findViewById(R.id.password);
-        TextView text = dialog.getCustomView().findViewById(R.id.enter_password);
+        mDialog.setTitle(R.string.enter_password);
+        final View mPositiveAction = mDialog.getActionButton(DialogAction.POSITIVE);
+        final EditText mPasswordInput = Objects.requireNonNull(mDialog.getCustomView()).findViewById(R.id.password);
+        TextView text = mDialog.getCustomView().findViewById(R.id.enter_password);
         text.setText(R.string.decrypt_message);
         mPasswordInput.addTextChangedListener(
                 new TextWatcher() {
@@ -172,51 +174,47 @@ public class PDFEncryptionUtility {
                         input_password[0] = input.toString();
                     }
                 });
-        dialog.show();
+        mDialog.show();
         mPositiveAction.setEnabled(false);
         mPositiveAction.setOnClickListener(v -> {
-            String finalOutputFile;
-            PdfReader reader = null;
-            try {
-                reader = new PdfReader(file, mContext.getString(R.string.app_name).getBytes());
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
-            byte[] password;
-            finalOutputFile = file.replace(mContext.getResources().getString(R.string.pdf_ext),
-                    mContext.getString(R.string.decrypted_file));
-
-            if (mFileUtils.isFileExist(finalOutputFile)) {
-                int append = FileUtils.checkRepeat(finalOutputFile, mFileList);
-                finalOutputFile = finalOutputFile.replace(mContext.getResources().getString(R.string.pdf_ext),
-                        append + mContext.getResources().getString(R.string.pdf_ext));
-            }
-
-            password = reader.computeUserPassword();
-            byte[] input = input_password[0].getBytes();
-            if (Arrays.equals(input, password)) {
-                try {
-                    PdfStamper stamper = new PdfStamper(reader, new FileOutputStream(finalOutputFile));
-                    stamper.close();
-                } catch (DocumentException | IOException e) {
-                    e.printStackTrace();
-                }
-                showSnackbar(R.string.password_remove);
-                reader.close();
-                dataSetChanged.updateDataset();
-            } else {
-                showSnackbar(R.string.incorrect_passowrd);
-            }
-            dialog.dismiss();
+            removePasswordUtil(file, dataSetChanged, mFileList, input_password);
+            mDialog.dismiss();
         });
     }
 
-    /**
-     * Creates Snackbar
-     */
-    private void showSnackbar(int input) {
-        Snackbar.make(Objects.requireNonNull(mContext).findViewById(android.R.id.content),
-                input,
-                Snackbar.LENGTH_LONG).show();
+    private void removePasswordUtil(final String file,
+                                    final DataSetChanged dataSetChanged,
+                                    final ArrayList<File> mFileList,
+                                    final String[] inputPassword) {
+
+        String finalOutputFile;
+        PdfReader reader;
+        try {
+            reader = new PdfReader(file, mContext.getString(R.string.app_name).getBytes());
+            byte[] password;
+            finalOutputFile = file.replace(mContext.getResources().getString(R.string.pdf_ext),
+                    mContext.getString(R.string.decrypted_file));
+            File temp = new File(finalOutputFile);
+            if (mFileUtils.isFileExist(temp.getName())) {
+                int append = mFileUtils.checkRepeat(finalOutputFile, mFileList);
+                finalOutputFile = finalOutputFile.replace(mContext.getResources().getString(R.string.pdf_ext),
+                        append + mContext.getResources().getString(R.string.pdf_ext));
+            }
+            password = reader.computeUserPassword();
+            byte[] input = inputPassword[0].getBytes();
+            if (Arrays.equals(input, password)) {
+                PdfStamper stamper = new PdfStamper(reader, new FileOutputStream(finalOutputFile));
+                stamper.close();
+                showSnackbar(mContext, R.string.password_remove);
+                reader.close();
+                dataSetChanged.updateDataset();
+                new DatabaseHelper(mContext).insertRecord(finalOutputFile, mContext.getString(R.string.decrypted));
+            } else {
+                showSnackbar(mContext, R.string.incorrect_passowrd);
+            }
+        } catch (IOException | DocumentException e) {
+            e.printStackTrace();
+            showSnackbar(mContext, R.string.error_occurred);
+        }
     }
 }

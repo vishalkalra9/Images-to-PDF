@@ -3,25 +3,26 @@ package swati4star.createpdf.util;
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
 import android.content.ContentResolver;
-import android.content.ContentUris;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.database.Cursor;
+import android.graphics.Bitmap;
+import android.graphics.Color;
 import android.net.Uri;
-import android.os.Build;
 import android.os.Bundle;
 import android.os.CancellationSignal;
 import android.os.Environment;
 import android.os.ParcelFileDescriptor;
+import android.preference.PreferenceManager;
 import android.print.PageRange;
 import android.print.PrintAttributes;
 import android.print.PrintDocumentAdapter;
 import android.print.PrintDocumentInfo;
 import android.print.PrintManager;
-import android.provider.DocumentsContract;
 import android.provider.MediaStore;
-import android.support.design.widget.Snackbar;
 import android.support.v4.content.FileProvider;
+import android.util.Log;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -31,24 +32,33 @@ import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
-import java.util.Objects;
 
 import swati4star.createpdf.R;
 import swati4star.createpdf.database.DatabaseHelper;
 
+import static swati4star.createpdf.util.Constants.AUTHORITY_APP;
+import static swati4star.createpdf.util.Constants.STORAGE_LOCATION;
+import static swati4star.createpdf.util.Constants.pdfDirectory;
+import static swati4star.createpdf.util.FileUriUtils.getImageRealPath;
+import static swati4star.createpdf.util.FileUriUtils.getUriRealPathAboveKitkat;
+import static swati4star.createpdf.util.FileUriUtils.isAboveKitKat;
+import static swati4star.createpdf.util.FileUriUtils.isWhatsappImage;
+import static swati4star.createpdf.util.StringUtils.getDefaultStorageLocation;
+import static swati4star.createpdf.util.StringUtils.showSnackbar;
 
 public class FileUtils {
 
     private final Activity mContext;
     private final ContentResolver mContentResolver;
+    private final SharedPreferences mSharedPreferences;
 
     public FileUtils(Activity context) {
         this.mContext = context;
         mContentResolver = mContext.getContentResolver();
+        mSharedPreferences = PreferenceManager.getDefaultSharedPreferences(context);
     }
 
     // GET PDF DETAILS
-
     /**
      * Gives a formatted last modified date for pdf ListView
      * @param file file object whose last modified date is to be returned
@@ -56,11 +66,9 @@ public class FileUtils {
      * @return String date modified in formatted form
      **/
     public static String getFormattedDate(File file) {
-
         Date lastModDate = new Date(file.lastModified());
         String[] formatdate = lastModDate.toString().split(" ");
         String time = formatdate[3];
-
         String[] formattime =  time.split(":");
         String date = formattime[0] + ":" + formattime[1];
         return formatdate[0] + ", " + formatdate[1] + " " + formatdate[2] + " at " + date;
@@ -130,7 +138,6 @@ public class FileUtils {
 
         PrintManager printManager = (PrintManager) mContext
                 .getSystemService(Context.PRINT_SERVICE);
-
         String jobName = mContext.getString(R.string.app_name) + " Document";
         if (printManager != null) {
             printManager.print(jobName, mPrintDocumentAdapter, null);
@@ -144,7 +151,7 @@ public class FileUtils {
      * @param  file - the file to be shared
      */
     public void shareFile(File file) {
-        Uri uri = FileProvider.getUriForFile(mContext, "com.swati4star.shareFile", file);
+        Uri uri = FileProvider.getUriForFile(mContext, AUTHORITY_APP, file);
         ArrayList<Uri> uris = new ArrayList<>();
         uris.add(uri);
         shareFile(uris);
@@ -158,7 +165,7 @@ public class FileUtils {
     public void shareMultipleFiles(List<File> files) {
         ArrayList<Uri> uris = new ArrayList<>();
         for (File file: files) {
-            Uri uri = FileProvider.getUriForFile(mContext, "com.swati4star.shareFile", file);
+            Uri uri = FileProvider.getUriForFile(mContext, AUTHORITY_APP, file);
             uris.add(uri);
         }
         shareFile(uris);
@@ -187,39 +194,31 @@ public class FileUtils {
         Intent target = new Intent(Intent.ACTION_VIEW);
         target.setFlags(Intent.FLAG_ACTIVITY_NO_HISTORY);
 
-        Uri uri = FileProvider.getUriForFile(mContext, "com.swati4star.shareFile", file);
-
-        target.setDataAndType(uri,  mContext.getString(R.string.pdf_type));
-        target.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-
-        Intent intent = Intent.createChooser(target, mContext.getString(R.string.open_file));
         try {
-            mContext.startActivity(intent);
-        } catch (ActivityNotFoundException e) {
-            Snackbar.make(Objects.requireNonNull(mContext).findViewById(android.R.id.content),
-                    R.string.snackbar_no_pdf_app, Snackbar.LENGTH_LONG).show();
+            Uri uri = FileProvider.getUriForFile(mContext, AUTHORITY_APP, file);
+            target.setDataAndType(uri, mContext.getString(R.string.pdf_type));
+            target.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            openIntent(Intent.createChooser(target, mContext.getString(R.string.open_file)));
+        } catch (Exception e) {
+            showSnackbar(mContext, R.string.error_occurred);
         }
     }
+
     /**
      * Checks if the new file already exists.
      *
      * @param finalOutputFile Path of pdf file to check
      * @param mFile File List of all PDFs
-     * @return Number to be added finally in the name
+     * @return Number to be added finally in the name to avoid overwrite
      */
-    public static int checkRepeat(String finalOutputFile, final ArrayList<File> mFile) {
-        int flag = 1;
-        int append = 1;
-        while (flag == 1) {
-            for (int i = 0; i < mFile.size(); i++) {
-                flag = 0;
-                if (finalOutputFile.equals(mFile.get(i).getPath())) {
-                    flag = 1;
-                    append++;
-                    break;
-                }
-            }
-            finalOutputFile = finalOutputFile.replace(".pdf", append + ".pdf");
+    public int checkRepeat(String finalOutputFile, final ArrayList<File> mFile) {
+        boolean flag = true;
+        int append = 0;
+        while (flag) {
+            append++;
+            String name = finalOutputFile.replace(mContext.getString(R.string.pdf_ext),
+                    append + mContext.getString(R.string.pdf_ext));
+            flag = mFile.contains(new File(name));
         }
         return append;
     }
@@ -236,218 +235,12 @@ public class FileUtils {
         } else {
             if (isAboveKitKat()) {
                 // Android OS above sdk version 19.
-                ret = getUriRealPathAboveKitkat(uri);
-
+                ret = getUriRealPathAboveKitkat(mContext, uri);
             } else {
                 // Android OS below sdk version 19
                 ret = getImageRealPath(mContentResolver, uri, null);
             }
         }
-        return ret;
-    }
-
-    /**
-     * Get real path for Android Kitkat and above
-     * @param uri - uri of the image
-     * @return  - real path of the image file on device
-     */
-    private String getUriRealPathAboveKitkat(Uri uri) {
-        String ret = "";
-
-        if (mContext != null && uri != null) {
-
-            if (isContentUri(uri)) {
-                if (isGooglePhotoDoc(uri.getAuthority())) {
-                    ret = uri.getLastPathSegment();
-                } else {
-                    ret = getImageRealPath(mContext.getContentResolver(), uri, null);
-                }
-            } else if (isFileUri(uri)) {
-                ret = uri.getPath();
-            } else if (isDocumentUri(uri)) {
-
-                // Get uri related document id.
-                String documentId = DocumentsContract.getDocumentId(uri);
-
-                // Get uri authority.
-                String uriAuthority = uri.getAuthority();
-
-                if (isMediaDoc(uriAuthority)) {
-                    String[] idArr = documentId.split(":");
-                    if (idArr.length == 2) {
-                        // First item is document type.
-                        String docType = idArr[0];
-
-                        // Second item is document real id.
-                        String realDocId = idArr[1];
-
-                        // Get content uri by document type.
-                        Uri mediaContentUri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI;
-                        switch (docType) {
-                            case "image":
-                                mediaContentUri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI;
-                                break;
-                            case "video":
-                                mediaContentUri = MediaStore.Video.Media.EXTERNAL_CONTENT_URI;
-                                break;
-                            case "audio":
-                                mediaContentUri = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI;
-                                break;
-                        }
-
-                        // Get where clause with real document id.
-                        String whereClause = MediaStore.Images.Media._ID + " = " + realDocId;
-
-                        ret = getImageRealPath(mContentResolver, mediaContentUri, whereClause);
-                    }
-
-                } else if (isDownloadDoc(uriAuthority)) {
-                    // Build download uri.
-                    Uri downloadUri = Uri.parse("content://downloads/public_downloads");
-
-                    // Append download document id at uri end.
-                    Uri downloadUriAppendId = ContentUris.withAppendedId(downloadUri, Long.valueOf(documentId));
-
-                    ret = getImageRealPath(mContentResolver, downloadUriAppendId, null);
-
-                } else if (isExternalStoreDoc(uriAuthority)) {
-                    String[] idArr = documentId.split(":");
-                    if (idArr.length == 2) {
-                        String type = idArr[0];
-                        String realDocId = idArr[1];
-
-                        if ("primary".equalsIgnoreCase(type)) {
-                            ret = Environment.getExternalStorageDirectory() + "/" + realDocId;
-                        }
-                    }
-                }
-            }
-        }
-        return ret;
-    }
-
-    /** Check whether current android os version is bigger than kitkat or not.
-     * @return  - true if os version bigger than kitkat , else false
-     */
-    private boolean isAboveKitKat() {
-        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT;
-    }
-
-    /** Check whether this uri represent a document or not.
-     * @return  - true if document , else false
-     */
-    private boolean isDocumentUri(Uri uri) {
-        boolean ret = false;
-        if (mContext != null && uri != null) {
-            ret = DocumentsContract.isDocumentUri(mContext, uri);
-        }
-        return ret;
-    }
-
-    /** Check whether this uri is a content uri or not.
-     *  content uri like content://media/external/images/media/1302716
-     *  @return - true if content uri, else false
-     *  */
-    private boolean isContentUri(Uri uri) {
-        boolean ret = false;
-        if (uri != null) {
-            String uriSchema = uri.getScheme();
-            if ("content".equalsIgnoreCase(uriSchema)) {
-                ret = true;
-            }
-        }
-        return ret;
-    }
-
-    /** Check whether this uri is a file uri or not.
-     *  file uri like file:///storage/41B7-12F1/DCIM/Camera/IMG_20180211_095139.jpg
-     *  @return - true if file uri, else false
-     * */
-    private boolean isFileUri(Uri uri) {
-        boolean ret = false;
-        if (uri != null) {
-            String uriSchema = uri.getScheme();
-            if ("file".equalsIgnoreCase(uriSchema)) {
-                ret = true;
-            }
-        }
-        return ret;
-    }
-
-    /** Check whether this document is provided by ExternalStorageProvider.
-     * @return true if document is provided by ExternalStorageProvider, else false
-     */
-    private boolean isExternalStoreDoc(String uriAuthority) {
-        return "com.android.externalstorage.documents".equals(uriAuthority);
-    }
-
-    /** Check whether this document is provided by DownloadsProvider.
-     * @return true if document is provided by DownloadsProvider, else false
-     */
-    private boolean isDownloadDoc(String uriAuthority) {
-        return "com.android.providers.downloads.documents".equals(uriAuthority);
-    }
-
-    /** Check whether this document is provided by MediaProvider.
-     * @return true if media document, else false
-     */
-    private boolean isMediaDoc(String uriAuthority) {
-        return "com.android.providers.media.documents".equals(uriAuthority);
-    }
-
-    /** Check whether this document is provided by google photos.
-     * @return true if google photo, else false
-     */
-    private boolean isGooglePhotoDoc(String uriAuthority) {
-        return "com.google.android.apps.photos.content".equals(uriAuthority);
-    }
-
-    /** Check whether the image is whatsapp image
-     * @return true if whatsapp image, else false
-     */
-    private boolean isWhatsappImage(String uriAuthority) {
-        return "com.whatsapp.provider.media".equals(uriAuthority);
-    }
-
-    /** Get real path of image from uri
-     * @param contentResolver - to access meta data from MediaStore
-     * @param uri - uri of image
-     * @param whereClause - add constraint on content resolver
-     * @return true if google photo, else false
-     */
-    private String getImageRealPath(ContentResolver contentResolver, Uri uri, String whereClause) {
-        String ret = "";
-
-        // Query the uri with condition.
-        Cursor cursor = contentResolver.query(uri, null, whereClause, null, null);
-
-        if (cursor != null) {
-            boolean moveToFirst = cursor.moveToFirst();
-            if (moveToFirst) {
-
-                // Get columns name by uri type.
-                String columnName = MediaStore.Images.Media.DATA;
-
-                if ( uri == MediaStore.Images.Media.EXTERNAL_CONTENT_URI ) {
-                    columnName = MediaStore.Images.Media.DATA;
-                } else if ( uri == MediaStore.Audio.Media.EXTERNAL_CONTENT_URI ) {
-                    columnName = MediaStore.Audio.Media.DATA;
-                } else if ( uri == MediaStore.Video.Media.EXTERNAL_CONTENT_URI ) {
-                    columnName = MediaStore.Video.Media.DATA;
-                }
-
-                // Get column index.
-                int imageColumnIndex = cursor.getColumnIndex(columnName);
-
-                if (imageColumnIndex == -1)
-                    return ret;
-
-                // Get column value which is the uri related file local path.
-                ret = cursor.getString(imageColumnIndex);
-                cursor.close();
-            }
-        }
-
         return ret;
     }
 
@@ -458,8 +251,8 @@ public class FileUtils {
      */
 
     public boolean isFileExist(String mFileName) {
-        String path = Environment.getExternalStorageDirectory().getAbsolutePath() +
-                mContext.getString(R.string.pdf_dir) + mFileName;
+        String path = mSharedPreferences.getString(STORAGE_LOCATION,
+                getDefaultStorageLocation()) + mFileName;
         File file = new File(path);
         return file.exists();
     }
@@ -495,5 +288,100 @@ public class FileUtils {
      */
     public String getFileName(String path) {
         return path.substring(path.lastIndexOf(mContext.getString(R.string.path_seperator)) + 1);
+    }
+
+    /**
+     * Extracts directory path from full file path
+     *
+     * @param path absolute path of the file
+     * @return absolute path of file directory
+     */
+    public String getFileDirectoryPath(String path) {
+        return path.substring(0, path.lastIndexOf('/') + 1);
+    }
+
+    /**
+     * Saves bitmap to external storage
+     * @param finalBitmap - bitmap to save
+     */
+    static String saveImage(Bitmap finalBitmap) {
+
+        if (checkIfBitmapIsWhite(finalBitmap))
+            return null;
+
+        String root = Environment.getExternalStorageDirectory().toString();
+        File myDir = new File(root + pdfDirectory);
+        String fname = "image_" + System.currentTimeMillis() + ".jpg";
+
+        File file = new File(myDir, fname);
+        if (file.exists()) file.delete();
+        try {
+            FileOutputStream out = new FileOutputStream(file);
+            finalBitmap.compress(Bitmap.CompressFormat.JPEG, 100, out);
+            Log.v("saving", fname);
+            out.flush();
+            out.close();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return myDir + "/" + fname;
+    }
+
+    /**
+     * Checks of the bitmap is just all white pixels
+     * @param bitmap - input bitmap
+     * @return - true, if bitmap is all white
+     */
+    private static boolean checkIfBitmapIsWhite(Bitmap bitmap) {
+        int w = bitmap.getWidth();
+        int h = bitmap.getHeight();
+        for (int i =  0; i < w; i++) {
+            for (int j = 0; j < h; j++) {
+                int pixel =  bitmap.getPixel(i, j);
+                if (pixel != Color.WHITE) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Opens image in a gallery application
+     * @param path - image path
+     */
+    public void openImage(String path) {
+        File file = new File(path);
+        Intent target = new Intent(Intent.ACTION_VIEW);
+        target.setFlags(Intent.FLAG_ACTIVITY_NO_HISTORY);
+        Uri uri = FileProvider.getUriForFile(mContext, AUTHORITY_APP, file);
+        target.setDataAndType(uri,  "image/*");
+        target.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        openIntent(Intent.createChooser(target, mContext.getString(R.string.open_file)));
+    }
+
+    /**
+     * Opens the targeted intent (if possible), otherwise show a snackbar
+     * @param intent - input intent
+     */
+    private void openIntent(Intent intent) {
+        try {
+            mContext.startActivity(intent);
+        } catch (ActivityNotFoundException e) {
+            showSnackbar(mContext, R.string.snackbar_no_pdf_app);
+        }
+    }
+
+    /**
+     * Returns file chooser intent
+     * @return - intent
+     */
+    public Intent getFileChooser() {
+        String folderPath = Environment.getExternalStorageDirectory() + "/";
+        Intent intent = new Intent();
+        intent.setAction(Intent.ACTION_GET_CONTENT);
+        Uri myUri = Uri.parse(folderPath);
+        intent.setDataAndType(myUri, mContext.getString(R.string.pdf_type));
+        return Intent.createChooser(intent, mContext.getString(R.string.merge_file_select));
     }
 }

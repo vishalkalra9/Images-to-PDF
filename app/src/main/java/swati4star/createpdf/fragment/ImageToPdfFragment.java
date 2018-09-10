@@ -12,7 +12,6 @@ import android.os.Bundle;
 import android.os.Parcelable;
 import android.preference.PreferenceManager;
 import android.support.annotation.NonNull;
-import android.support.design.widget.Snackbar;
 import android.support.v4.app.Fragment;
 import android.support.v4.content.ContextCompat;
 import android.support.v7.widget.GridLayoutManager;
@@ -24,22 +23,20 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.CheckBox;
 import android.widget.EditText;
-import android.widget.RadioGroup;
-import android.widget.Spinner;
 import android.widget.TextView;
 
 import com.afollestad.materialdialogs.DialogAction;
 import com.afollestad.materialdialogs.MaterialDialog;
 import com.dd.morphingbutton.MorphingButton;
-import com.gun0912.tedpicker.Config;
-import com.gun0912.tedpicker.ImagePickerActivity;
-import com.itextpdf.text.PageSize;
-import com.itextpdf.text.Rectangle;
 import com.theartofdev.edmodo.cropper.CropImage;
+import com.zhihu.matisse.Matisse;
+import com.zhihu.matisse.MimeType;
+import com.zhihu.matisse.engine.impl.PicassoEngine;
+import com.zhihu.matisse.internal.entity.CaptureStrategy;
 
 import java.io.File;
 import java.util.ArrayList;
-import java.util.Objects;
+import java.util.List;
 
 import butterknife.BindView;
 import butterknife.ButterKnife;
@@ -47,38 +44,51 @@ import butterknife.OnClick;
 import swati4star.createpdf.R;
 import swati4star.createpdf.activity.ImageEditor;
 import swati4star.createpdf.activity.PreviewActivity;
+import swati4star.createpdf.activity.RearrangeImages;
 import swati4star.createpdf.adapter.EnhancementOptionsAdapter;
+import swati4star.createpdf.database.DatabaseHelper;
+import swati4star.createpdf.interfaces.OnItemClickListner;
 import swati4star.createpdf.interfaces.OnPDFCreatedInterface;
 import swati4star.createpdf.model.EnhancementOptionsEntity;
 import swati4star.createpdf.model.ImageToPDFOptions;
+import swati4star.createpdf.util.Constants;
 import swati4star.createpdf.util.CreatePdf;
 import swati4star.createpdf.util.FileUtils;
 import swati4star.createpdf.util.MorphButtonUtility;
 import swati4star.createpdf.util.PageSizeUtils;
 import swati4star.createpdf.util.StringUtils;
 
+import static swati4star.createpdf.util.Constants.AUTHORITY_APP;
+import static swati4star.createpdf.util.Constants.DEFAULT_BORDER_WIDTH;
 import static swati4star.createpdf.util.Constants.DEFAULT_COMPRESSION;
-import static swati4star.createpdf.util.Constants.IMAGE_EDITOR_KEY;
-import static swati4star.createpdf.util.Constants.PREVIEW_IMAGES;
+import static swati4star.createpdf.util.Constants.DEFAULT_IMAGE_BORDER_TEXT;
+import static swati4star.createpdf.util.Constants.DEFAULT_PAGE_SIZE;
+import static swati4star.createpdf.util.Constants.DEFAULT_PAGE_SIZE_TEXT;
+import static swati4star.createpdf.util.Constants.DEFAULT_QUALITY_VALUE;
+import static swati4star.createpdf.util.Constants.OPEN_SELECT_IMAGES;
 import static swati4star.createpdf.util.Constants.RESULT;
+import static swati4star.createpdf.util.Constants.STORAGE_LOCATION;
+import static swati4star.createpdf.util.DialogUtils.createAnimationDialog;
+import static swati4star.createpdf.util.DialogUtils.createCustomDialog;
+import static swati4star.createpdf.util.DialogUtils.createCustomDialogWithoutContent;
+import static swati4star.createpdf.util.DialogUtils.createOverwriteDialog;
 import static swati4star.createpdf.util.ImageEnhancementOptionsUtils.getEnhancementOptions;
-
+import static swati4star.createpdf.util.StringUtils.getDefaultStorageLocation;
+import static swati4star.createpdf.util.StringUtils.getSnackbarwithAction;
+import static swati4star.createpdf.util.StringUtils.showSnackbar;
 
 /**
  * ImageToPdfFragment fragment to start with creating PDF
  */
-public class ImageToPdfFragment extends Fragment implements EnhancementOptionsAdapter.OnItemClickListner,
+public class ImageToPdfFragment extends Fragment implements OnItemClickListner,
         OnPDFCreatedInterface {
 
-    private static final int INTENT_REQUEST_GET_IMAGES = 13;
-    private static final int PERMISSION_REQUEST_WRITE_EXTERNAL_STORAGE_RESULT = 1;
     private static final int INTENT_REQUEST_APPLY_FILTER = 10;
     private static final int INTENT_REQUEST_PREVIEW_IMAGE = 11;
+    private static final int INTENT_REQUEST_REARRANGE_IMAGE = 12;
+    private static final int INTENT_REQUEST_GET_IMAGES = 13;
+    private static final int PERMISSION_REQUEST_WRITE_EXTERNAL_STORAGE_RESULT = 1;
 
-    private static int mImageCounter = 0;
-    private ArrayList<EnhancementOptionsEntity> mEnhancementOptionsEntityArrayList = new ArrayList<>();
-    @BindView(R.id.addImages)
-    MorphingButton addImages;
     @BindView(R.id.pdfCreate)
     MorphingButton mCreatePdf;
     @BindView(R.id.pdfOpen)
@@ -87,20 +97,20 @@ public class ImageToPdfFragment extends Fragment implements EnhancementOptionsAd
     RecyclerView mEnhancementOptionsRecycleView;
     @BindView(R.id.tvNoOfImages)
     TextView mNoOfImages;
+
     private MorphButtonUtility mMorphButtonUtility;
     private Activity mActivity;
     private ArrayList<String> mImagesUri = new ArrayList<>();
-    private final ArrayList<String> mTempUris = new ArrayList<>();
     private String mPath;
-    private String mPassword;
-    private String mQuality;
-    private Rectangle mPageSize = PageSize.A4;
     private boolean mOpenSelectImages = false;
     private SharedPreferences mSharedPreferences;
-    private EnhancementOptionsAdapter mEnhancementOptionsAdapter;
-    private boolean mPasswordProtected = false;
     private FileUtils mFileUtils;
+    private PageSizeUtils mPageSizeUtils;
     private int mButtonClicked = 0;
+    private static int mImageCounter;
+    private ImageToPDFOptions mPdfOptions;
+    private MaterialDialog mMaterialDialog;
+    private String mHomePath;
 
     @Override
     public void onAttach(Context context) {
@@ -114,51 +124,67 @@ public class ImageToPdfFragment extends Fragment implements EnhancementOptionsAd
         View root = inflater.inflate(R.layout.fragment_home, container, false);
         ButterKnife.bind(this, root);
 
+        // Initialize variables
         mSharedPreferences = PreferenceManager.getDefaultSharedPreferences(mActivity);
         mMorphButtonUtility = new MorphButtonUtility(mActivity);
-        mOpenPdf.setVisibility(View.GONE);
+        mFileUtils = new FileUtils(mActivity);
+        mPageSizeUtils = new PageSizeUtils(mActivity);
+        mMorphButtonUtility.morphToGrey(mCreatePdf, mMorphButtonUtility.integer());
+        mHomePath = mSharedPreferences.getString(STORAGE_LOCATION,
+                getDefaultStorageLocation());
 
         // Get runtime permissions if build version >= Android M
         getRuntimePermissions(false);
 
-        showEnhancementOptions();
-
-        mFileUtils = new FileUtils(mActivity);
+        // Get default values & show enhancement options
+        resetValues();
 
         // Check for the images received
-        Bundle bundle = getArguments();
-        if (bundle != null) {
-            ArrayList<Parcelable> uris = bundle.getParcelableArrayList(getString(R.string.bundleKey));
-            for (Parcelable p : uris) {
-                Uri uri = (Uri) p;
-                if (mFileUtils.getUriRealPath(uri) == null) {
-                    showSnackbar(R.string.whatsappToast);
-                } else {
-                    mTempUris.add(mFileUtils.getUriRealPath(uri));
-                    if (mTempUris.size() > 0) {
-                        mNoOfImages.setText(String.format(mActivity.getResources()
-                                .getString(R.string.images_selected), mTempUris.size()));
-                        mNoOfImages.setVisibility(View.VISIBLE);
-                    } else {
-                        mNoOfImages.setVisibility(View.GONE);
-                    }
-                    showSnackbar(R.string.successToast);
-                }
-            }
-        } else {
-            mMorphButtonUtility.morphToGrey(mCreatePdf, mMorphButtonUtility.integer());
-            mCreatePdf.setEnabled(false);
-        }
+        checkForImagesInBundle();
 
         return root;
     }
 
+    /**
+     * Adds images (if any) received in the bundle
+     */
+    private void checkForImagesInBundle() {
+        Bundle bundle = getArguments();
+        if (bundle != null) {
+            if (bundle.getBoolean(OPEN_SELECT_IMAGES))
+                startAddingImages();
+            ArrayList<Parcelable> uris = bundle.getParcelableArrayList(getString(R.string.bundleKey));
+            if (uris == null)
+                    return;
+            for (Parcelable p : uris) {
+                Uri uri = (Uri) p;
+                if (mFileUtils.getUriRealPath(uri) == null) {
+                    showSnackbar(mActivity, R.string.whatsappToast);
+                } else {
+                    mImagesUri.add(mFileUtils.getUriRealPath(uri));
+                    if (mImagesUri.size() > 0) {
+                        mNoOfImages.setText(String.format(mActivity.getResources()
+                                .getString(R.string.images_selected), mImagesUri.size()));
+                        mNoOfImages.setVisibility(View.VISIBLE);
+                    } else {
+                        mNoOfImages.setVisibility(View.GONE);
+                    }
+                    showSnackbar(mActivity, R.string.successToast);
+                }
+            }
+        }
+    }
+
+    /**
+     * Shows enhancement options
+     */
     private void showEnhancementOptions() {
         GridLayoutManager mGridLayoutManager = new GridLayoutManager(getActivity(), 2);
         mEnhancementOptionsRecycleView.setLayoutManager(mGridLayoutManager);
-        mEnhancementOptionsEntityArrayList = getEnhancementOptions(mActivity);
-        mEnhancementOptionsAdapter = new EnhancementOptionsAdapter(this, mEnhancementOptionsEntityArrayList);
-        mEnhancementOptionsRecycleView.setAdapter(mEnhancementOptionsAdapter);
+        ArrayList<EnhancementOptionsEntity> list = getEnhancementOptions(mActivity, mPdfOptions);
+        EnhancementOptionsAdapter adapter =
+                new EnhancementOptionsAdapter(this, list);
+        mEnhancementOptionsRecycleView.setAdapter(adapter);
     }
 
     /**
@@ -173,67 +199,34 @@ public class ImageToPdfFragment extends Fragment implements EnhancementOptionsAd
         }
     }
 
-    private void filterImages() {
-        if (mTempUris.size() == 0)
-            showSnackbar(R.string.snackbar_no_images);
-        else {
-            // Apply filters
-            try {
-                Intent intent = new Intent(getContext(), ImageEditor.class);
-                intent.putStringArrayListExtra(IMAGE_EDITOR_KEY, mTempUris);
-                startActivityForResult(intent, INTENT_REQUEST_APPLY_FILTER);
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
-        }
-    }
-
-    // Create Pdf of selected images
-    @SuppressWarnings("unchecked")
+    /**
+     * Create Pdf of selected images
+     */
     @OnClick({R.id.pdfCreate})
     void createPdf() {
-        if (mImagesUri.size() == 0) {
-            if (mTempUris.size() == 0) {
-                showSnackbar(R.string.snackbar_no_images);
-                return;
-            } else
-                mImagesUri = (ArrayList<String>) mTempUris.clone();
-        }
-
-        if (mImagesUri.size() < mTempUris.size()) {
-            for (int i = mImagesUri.size(); i < mTempUris.size(); i++) {
-                mImagesUri.add(mTempUris.get(i));
+        mPdfOptions.setImagesUri(mImagesUri);
+        mPdfOptions.setPageSize(PageSizeUtils.mPageSize);
+        MaterialDialog.Builder builder = createCustomDialog(mActivity,
+                R.string.creating_pdf, R.string.enter_file_name);
+        builder.input(getString(R.string.example), null, (dialog, input) -> {
+            if (StringUtils.isEmpty(input)) {
+                showSnackbar(mActivity, R.string.snackbar_name_not_blank);
+            } else {
+                final String filename = input.toString();
+                FileUtils utils = new FileUtils(mActivity);
+                if (!utils.isFileExist(filename + getString(R.string.pdf_ext))) {
+                    mPdfOptions.setOutFileName(filename);
+                    new CreatePdf(mPdfOptions, mHomePath,
+                            ImageToPdfFragment.this).execute();
+                } else {
+                    MaterialDialog.Builder builder2 = createOverwriteDialog(mActivity);
+                    builder2.onPositive( (dialog2, which) -> {
+                        mPdfOptions.setOutFileName(filename);
+                        new CreatePdf(mPdfOptions, mHomePath, ImageToPdfFragment.this).execute();
+                    }).onNegative((dialog1, which) -> createPdf()).show();
+                }
             }
-        }
-        new MaterialDialog.Builder(mActivity)
-                .title(R.string.creating_pdf)
-                .content(R.string.enter_file_name)
-                .input(getString(R.string.example), null, (dialog, input) -> {
-                    if (StringUtils.isEmpty(input)) {
-                        showSnackbar(R.string.snackbar_name_not_blank);
-                    } else {
-                        final String filename = input.toString();
-                        FileUtils utils = new FileUtils(mActivity);
-                        if (!utils.isFileExist(filename + getString(R.string.pdf_ext))) {
-                            new CreatePdf(mActivity, new ImageToPDFOptions(filename, mPageSize,
-                                    mPasswordProtected, mPassword, mQuality, mImagesUri),
-                                    ImageToPdfFragment.this).execute();
-                        } else {
-                            new MaterialDialog.Builder(mActivity)
-                                    .title(R.string.warning)
-                                    .content(R.string.overwrite_message)
-                                    .positiveText(android.R.string.ok)
-                                    .negativeText(android.R.string.cancel)
-                                    .onPositive((dialog12, which) -> new CreatePdf(
-                                            mActivity, new ImageToPDFOptions(filename, mPageSize,
-                                            mPasswordProtected, mPassword, mQuality, mImagesUri),
-                                            ImageToPdfFragment.this).execute())
-                                    .onNegative((dialog1, which) -> createPdf())
-                                    .show();
-                        }
-                    }
-                })
-                .show();
+        }).show();
     }
 
     @OnClick(R.id.pdfOpen)
@@ -252,22 +245,26 @@ public class ImageToPdfFragment extends Fragment implements EnhancementOptionsAd
     public void onRequestPermissionsResult(int requestCode,
                                            @NonNull String[] permissions,
                                            @NonNull int[] grantResults) {
+
+        if (grantResults.length < 1)
+            return;
+
         switch (requestCode) {
             case PERMISSION_REQUEST_WRITE_EXTERNAL_STORAGE_RESULT: {
-                if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                if (grantResults[0] == PackageManager.PERMISSION_GRANTED) {
                     if (mOpenSelectImages)
                         selectImages();
-                    showSnackbar(R.string.snackbar_permissions_given);
+                    showSnackbar(mActivity, R.string.snackbar_permissions_given);
                 } else
-                    showSnackbar(R.string.snackbar_insufficient_permissions);
+                    showSnackbar(mActivity, R.string.snackbar_insufficient_permissions);
             }
         }
     }
 
     /**
-     * Called after ImagePickerActivity is called
+     * Called after Matisse Activity is called
      *
-     * @param requestCode REQUEST Code for opening ImagePickerActivity
+     * @param requestCode REQUEST Code for opening Matisse Activity
      * @param resultCode  result code of the process
      * @param data        Data of the image selected
      */
@@ -275,218 +272,156 @@ public class ImageToPdfFragment extends Fragment implements EnhancementOptionsAd
     public void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         mButtonClicked = 0;
-        if (resultCode != Activity.RESULT_OK)
+        if (resultCode != Activity.RESULT_OK || data == null)
             return;
 
         switch (requestCode) {
             case INTENT_REQUEST_GET_IMAGES:
-
-                mTempUris.clear();
-                ArrayList<Uri> imageUris = data.getParcelableArrayListExtra(ImagePickerActivity.EXTRA_IMAGE_URIS);
+                mImagesUri.clear();
+                List<Uri> imageUris = Matisse.obtainResult(data);
                 for (Uri uri : imageUris)
-                    mTempUris.add(uri.getPath());
+                    mImagesUri.add(mFileUtils.getUriRealPath(uri));
                 if (imageUris.size() > 0) {
                     mNoOfImages.setText(String.format(mActivity.getResources()
                             .getString(R.string.images_selected), imageUris.size()));
                     mNoOfImages.setVisibility(View.VISIBLE);
-                    showSnackbar(R.string.snackbar_images_added);
+                    showSnackbar(mActivity, R.string.snackbar_images_added);
                     mCreatePdf.setEnabled(true);
                 } else {
                     mNoOfImages.setVisibility(View.GONE);
                 }
                 mMorphButtonUtility.morphToSquare(mCreatePdf, mMorphButtonUtility.integer());
                 mOpenPdf.setVisibility(View.GONE);
-
                 break;
+
             case CropImage.CROP_IMAGE_ACTIVITY_REQUEST_CODE:
-
                 CropImage.ActivityResult result = CropImage.getActivityResult(data);
-                switch (resultCode) {
-                    case Activity.RESULT_OK:
-                        Uri resultUri = result.getUri();
-                        mImagesUri.add(resultUri.getPath());
-                        showSnackbar(R.string.snackbar_imagecropped);
-                        break;
-                    case CropImage.CROP_IMAGE_ACTIVITY_RESULT_ERROR_CODE:
-                        Exception error = result.getError();
-                        showSnackbar(R.string.snackbar_error_getCropped);
-                        error.printStackTrace();
-                    default:
-                        mImagesUri.add(mTempUris.get(mImageCounter));
-                }
-                mMorphButtonUtility.morphToSquare(mCreatePdf, mMorphButtonUtility.integer());
+                Uri resultUri = result.getUri();
+                if (mImagesUri.size() > mImageCounter)
+                    mImagesUri.set(mImageCounter, resultUri.getPath());
+                showSnackbar(mActivity, R.string.snackbar_imagecropped);
                 mImageCounter++;
-                next();
+                cropNextImage();
                 break;
+
             case INTENT_REQUEST_APPLY_FILTER:
-                switch (resultCode) {
-                    case Activity.RESULT_OK:
-                        try {
-                            mImagesUri.clear();
-                            mTempUris.clear();
-                            ArrayList<String> mFilterUris = data.getStringArrayListExtra(RESULT);
-                            int size = mFilterUris.size() - 1;
-                            for (int k = 0; k <= size; k++) {
-                                mTempUris.add(mFilterUris.get(k));
-                            }
-                        } catch (Exception e) {
-                            e.printStackTrace();
-                        }
-                }
+                mImagesUri.clear();
+                ArrayList<String> mFilterUris = data.getStringArrayListExtra(RESULT);
+                int size = mFilterUris.size() - 1;
+                for (int k = 0; k <= size; k++)
+                    mImagesUri.add(mFilterUris.get(k));
                 break;
 
             case INTENT_REQUEST_PREVIEW_IMAGE:
-                switch (resultCode) {
-                    case Activity.RESULT_OK:
-                        try {
-                            mImagesUri.clear();
-                            mTempUris.clear();
-                            ArrayList<String> uris = data.getStringArrayListExtra(RESULT);
-                            mImagesUri = uris;
-                            mTempUris.addAll(uris);
-                        } catch (Exception e) {
-                            e.printStackTrace();
-                        }
+                mImagesUri = data.getStringArrayListExtra(RESULT);
+                if (mImagesUri.size() > 0) {
+                    mNoOfImages.setText(String.format(mActivity.getResources()
+                            .getString(R.string.images_selected), mImagesUri.size()));
+                } else {
+                    mNoOfImages.setVisibility(View.GONE);
+                    mMorphButtonUtility.morphToGrey(mCreatePdf, mMorphButtonUtility.integer());
+                    mCreatePdf.setEnabled(false);
                 }
+                break;
+
+            case INTENT_REQUEST_REARRANGE_IMAGE:
+                mImagesUri = data.getStringArrayListExtra(RESULT);
+                showSnackbar(mActivity, R.string.images_rearranged);
                 break;
         }
     }
 
-
     @Override
     public void onItemClick(int position) {
+
+        if (mImagesUri.size() == 0) {
+            showSnackbar(mActivity, R.string.snackbar_no_images);
+            return;
+        }
         switch (position) {
             case 0:
                 passwordProtectPDF();
                 break;
             case 1:
-                cropImages();
+                cropNextImage();
                 break;
             case 2:
                 compressImage();
                 break;
             case 3:
-                filterImages();
+                startActivityForResult(ImageEditor.getStartIntent(mActivity, mImagesUri),
+                        INTENT_REQUEST_APPLY_FILTER);
                 break;
             case 4:
-                setPageSize();
+                mPageSizeUtils.showPageSizeDialog(R.layout.set_page_size_dialog, false);
                 break;
             case 5:
-                previewPDF();
+                startActivityForResult(PreviewActivity.getStartIntent(mActivity, mImagesUri),
+                        INTENT_REQUEST_PREVIEW_IMAGE);
                 break;
-            default:
+            case 6:
+                addBorder();
                 break;
+            case 7:
+                startActivityForResult(RearrangeImages.getStartIntent(mActivity, mImagesUri),
+                        INTENT_REQUEST_REARRANGE_IMAGE);
         }
     }
 
-    private void previewPDF() {
-        if (mImagesUri.size() == 0) {
-            if (mTempUris.size() == 0) {
-                showSnackbar(R.string.snackbar_no_images);
-                return;
-            } else
-                mImagesUri = (ArrayList<String>) mTempUris.clone();
-        }
-
-        if (mImagesUri.size() < mTempUris.size()) {
-            for (int i = mImagesUri.size(); i < mTempUris.size(); i++) {
-                mImagesUri.add(mTempUris.get(i));
-            }
-        }
-
-        Intent intent = new Intent(mActivity, PreviewActivity.class);
-        intent.putExtra(PREVIEW_IMAGES, mImagesUri);
-        startActivityForResult(intent, INTENT_REQUEST_PREVIEW_IMAGE);
-    }
-
-    private void setPageSize() {
-        if (mTempUris.size() == 0) {
-            showSnackbar(R.string.snackbar_no_images);
-            return;
-        }
-
-        new MaterialDialog.Builder(mActivity)
-                .title(R.string.set_page_size_text)
-                .customView(R.layout.set_page_size_dialog, true)
-                .positiveText(android.R.string.ok)
-                .negativeText(android.R.string.cancel)
+    private void addBorder() {
+        createCustomDialogWithoutContent(mActivity, R.string.border)
+                .customView(R.layout.dialog_border_image, true)
                 .onPositive((dialog1, which) -> {
                     View view = dialog1.getCustomView();
-                    RadioGroup radioGroup = view.findViewById(R.id.radio_group_page_size);
-                    int selectedId = radioGroup.getCheckedRadioButtonId();
-                    Spinner spinnerA = view.findViewById(R.id.spinner_page_size_a0_a10);
-                    Spinner spinnerB = view.findViewById(R.id.spinner_page_size_b0_b10);
-                    PageSizeUtils utils = new PageSizeUtils();
-                    mPageSize = utils.getPageSize(selectedId, spinnerA.getSelectedItem().toString(),
-                            spinnerB.getSelectedItem().toString());
-                }).show();
+                    final EditText input = view.findViewById(R.id.border_width);
+                    int value = 0;
+                    try {
+                        value = Integer.parseInt(String.valueOf(input.getText()));
+                        if (value > 200 || value < 0) {
+                            showSnackbar(mActivity, R.string.invalid_entry);
+                        } else {
+                            mPdfOptions.setBorderWidth(value);
+                            showEnhancementOptions();
+                        }
+                    } catch (NumberFormatException e) {
+                        showSnackbar(mActivity, R.string.invalid_entry);
+                    }
+                    final CheckBox cbSetDefault = view.findViewById(R.id.cbSetDefault);
+                    if (cbSetDefault.isChecked()) {
+                        SharedPreferences.Editor editor = mSharedPreferences.edit();
+                        editor.putInt(Constants.DEFAULT_IMAGE_BORDER_TEXT, value);
+                        editor.apply();
+                    }
+                }).build().show();
     }
 
     private void compressImage() {
-
-        if (mTempUris.size() == 0) {
-            showSnackbar(R.string.snackbar_no_images);
-            return;
-        }
-
-        String title = getString(R.string.compress_image) + " " +
-                mSharedPreferences.getInt(DEFAULT_COMPRESSION, 30) + "%)";
-
-        final MaterialDialog dialog = new MaterialDialog.Builder(mActivity)
-                .title(title)
+        createCustomDialogWithoutContent(mActivity, R.string.compression_image_edit)
                 .customView(R.layout.compress_image_dialog, true)
-                .positiveText(android.R.string.ok)
-                .negativeText(android.R.string.cancel)
                 .onPositive((dialog1, which) -> {
                     final EditText qualityInput = dialog1.getCustomView().findViewById(R.id.quality);
                     final CheckBox cbSetDefault = dialog1.getCustomView().findViewById(R.id.cbSetDefault);
-
                     int check;
                     try {
                         check = Integer.parseInt(String.valueOf(qualityInput.getText()));
                         if (check > 100 || check < 0) {
-                            showSnackbar(R.string.invalid_entry);
+                            showSnackbar(mActivity, R.string.invalid_entry);
                         } else {
-                            mQuality = String.valueOf(check);
+                            mPdfOptions.setQualityString(String.valueOf(check));
                             if (cbSetDefault.isChecked()) {
                                 SharedPreferences.Editor editor = mSharedPreferences.edit();
                                 editor.putInt(DEFAULT_COMPRESSION, check);
                                 editor.apply();
                             }
-                            showCompression();
+                            showEnhancementOptions();
                         }
                     } catch (NumberFormatException e) {
-                        showSnackbar(R.string.invalid_entry);
+                        showSnackbar(mActivity, R.string.invalid_entry);
                     }
-                }).build();
-
-        final View positiveAction = dialog.getActionButton(DialogAction.POSITIVE);
-        final EditText qualityValueInput = dialog.getCustomView().findViewById(R.id.quality);
-        qualityValueInput.addTextChangedListener(
-                new TextWatcher() {
-                    @Override
-                    public void beforeTextChanged(CharSequence s, int start, int count, int after) {
-                    }
-
-                    @Override
-                    public void onTextChanged(CharSequence s, int start, int before, int count) {
-                        positiveAction.setEnabled(s.toString().trim().length() > 0);
-                    }
-
-                    @Override
-                    public void afterTextChanged(Editable input) {
-                    }
-                });
-        dialog.show();
-        positiveAction.setEnabled(false);
+                }).show();
     }
 
     private void passwordProtectPDF() {
-        if (mTempUris.size() == 0) {
-            showSnackbar(R.string.snackbar_no_images);
-            return;
-        }
-
         final MaterialDialog dialog = new MaterialDialog.Builder(mActivity)
                 .title(R.string.set_password)
                 .customView(R.layout.custom_dialog, true)
@@ -498,7 +433,7 @@ public class ImageToPdfFragment extends Fragment implements EnhancementOptionsAd
         final View positiveAction = dialog.getActionButton(DialogAction.POSITIVE);
         final View neutralAction = dialog.getActionButton(DialogAction.NEUTRAL);
         final EditText passwordInput = dialog.getCustomView().findViewById(R.id.password);
-        passwordInput.setText(mPassword);
+        passwordInput.setText(mPdfOptions.getPassword());
         passwordInput.addTextChangedListener(
                 new TextWatcher() {
                     @Override
@@ -513,80 +448,62 @@ public class ImageToPdfFragment extends Fragment implements EnhancementOptionsAd
                     @Override
                     public void afterTextChanged(Editable input) {
                         if (StringUtils.isEmpty(input)) {
-                            showSnackbar(R.string.snackbar_password_cannot_be_blank);
+                            showSnackbar(mActivity, R.string.snackbar_password_cannot_be_blank);
                         } else {
-                            mPassword = input.toString();
-                            mPasswordProtected = true;
-                            onPasswordAdded();
+                            mPdfOptions.setPassword(input.toString());
+                            mPdfOptions.setPasswordProtected(true);
+                            showEnhancementOptions();
                         }
                     }
                 });
-        if (StringUtils.isNotEmpty(mPassword)) {
+        if (StringUtils.isNotEmpty(mPdfOptions.getPassword())) {
             neutralAction.setOnClickListener(v -> {
-                mPassword = null;
-                onPasswordRemoved();
-                mPasswordProtected = false;
+                mPdfOptions.setPasswordProtected(false);
+                showEnhancementOptions();
                 dialog.dismiss();
-                showSnackbar(R.string.password_remove);
+                showSnackbar(mActivity, R.string.password_remove);
             });
         }
         dialog.show();
         positiveAction.setEnabled(false);
     }
 
-    private void showCompression() {
-        mEnhancementOptionsEntityArrayList.get(2)
-                .setName(mQuality + "% Compressed");
-        mEnhancementOptionsAdapter.notifyDataSetChanged();
-    }
-
-    private void onPasswordAdded() {
-        mEnhancementOptionsEntityArrayList.get(0)
-                .setImage(getResources().getDrawable(R.drawable.baseline_done_24));
-        mEnhancementOptionsAdapter.notifyDataSetChanged();
-    }
-
-    private void onPasswordRemoved() {
-        mEnhancementOptionsEntityArrayList.get(0)
-                .setImage(getResources().getDrawable(R.drawable.baseline_enhanced_encryption_24));
-        mEnhancementOptionsAdapter.notifyDataSetChanged();
+    @Override
+    public void onPDFCreationStarted() {
+        mMaterialDialog = createAnimationDialog(mActivity);
+        mMaterialDialog.show();
     }
 
     @Override
     public void onPDFCreated(boolean success, String path) {
-        mImagesUri.clear();
-        mTempUris.clear();
-        mNoOfImages.setVisibility(View.GONE);
-        mImageCounter = 0;
-        mPassword = null;
-        if (success) {
-            mOpenPdf.setVisibility(View.VISIBLE);
-            mMorphButtonUtility.morphToSuccess(mCreatePdf);
-            mPath = path;
-        }
-    }
-
-    void cropImages() {
-        if (mTempUris.size() == 0) {
-            showSnackbar(R.string.snackbar_no_images);
+        mMaterialDialog.dismiss();
+        if (!success) {
+            showSnackbar(mActivity, R.string.snackbar_folder_not_created);
             return;
         }
-        next();
+        new DatabaseHelper(mActivity).insertRecord(path, mActivity.getString(R.string.created));
+        getSnackbarwithAction(mActivity, R.string.snackbar_pdfCreated)
+                .setAction(R.string.snackbar_viewAction, v -> mFileUtils.openFile(mPath)).show();
+        mOpenPdf.setVisibility(View.VISIBLE);
+        mMorphButtonUtility.morphToSuccess(mCreatePdf);
+        mPath = path;
+        resetValues();
     }
 
-    private void next() {
-        if (mImageCounter != mTempUris.size() && mImageCounter < mTempUris.size()) {
-            CropImage.activity(Uri.fromFile(new File(mTempUris.get(mImageCounter))))
+    private void cropNextImage() {
+        if (mImageCounter < mImagesUri.size()) {
+            CropImage.activity(Uri.fromFile(new File(mImagesUri.get(mImageCounter))))
                     .setActivityMenuIconColor(mMorphButtonUtility.color(R.color.colorPrimary))
                     .setInitialCropWindowPaddingRatio(0)
                     .setAllowRotation(true)
                     .setActivityTitle(getString(R.string.cropImage_activityTitle) + (mImageCounter + 1))
                     .start(mActivity, this);
+        } else {
+            mImageCounter = 0;
         }
     }
 
     private boolean getRuntimePermissions(boolean openImagesActivity) {
-
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             if ((ContextCompat.checkSelfPermission(mActivity, Manifest.permission.WRITE_EXTERNAL_STORAGE)
                     != PackageManager.PERMISSION_GRANTED) ||
@@ -606,32 +523,36 @@ public class ImageToPdfFragment extends Fragment implements EnhancementOptionsAd
         return true;
     }
 
-
     /**
-     * Opens ImagePickerActivity to select Images
+     * Opens Matisse activity to select Images
      */
     private void selectImages() {
-        Config config = new Config();
-        config.setToolbarTitleRes(R.string.image_picker_activity_toolbar_title);
-        ImagePickerActivity.setConfig(config);
-
-        Intent intent = new Intent(mActivity, ImagePickerActivity.class);
-
-        //add to intent the URIs of the already selected images
-        //first they are converted to Uri objects
-        ArrayList<Uri> uris = new ArrayList<>(mTempUris.size());
-        for (String stringUri : mTempUris) {
-            uris.add(Uri.fromFile(new File(stringUri)));
-        }
-        // add them to the intent
-        intent.putExtra(ImagePickerActivity.EXTRA_IMAGE_URIS, uris);
-
-        startActivityForResult(intent, INTENT_REQUEST_GET_IMAGES);
+        Matisse.from(this)
+                .choose(MimeType.ofImage(), false)
+                .countable(true)
+                .capture(true)
+                .captureStrategy(new CaptureStrategy(true, AUTHORITY_APP))
+                .maxSelectable(1000)
+                .imageEngine(new PicassoEngine())
+                .forResult(INTENT_REQUEST_GET_IMAGES);
     }
 
-    private void showSnackbar(int resID) {
-        Snackbar.make(Objects.requireNonNull(mActivity).findViewById(android.R.id.content),
-                resID, Snackbar.LENGTH_LONG).show();
+    /**
+     * Resets pdf creation related values & show enhancement options
+     */
+    private void resetValues() {
+        mPdfOptions = new ImageToPDFOptions();
+        mPdfOptions.setBorderWidth(mSharedPreferences.getInt(DEFAULT_IMAGE_BORDER_TEXT,
+                DEFAULT_BORDER_WIDTH));
+        mPdfOptions.setQualityString(
+                Integer.toString(mSharedPreferences.getInt(DEFAULT_COMPRESSION,
+                        DEFAULT_QUALITY_VALUE)));
+        mPdfOptions.setPageSize(mSharedPreferences.getString(DEFAULT_PAGE_SIZE_TEXT,
+                DEFAULT_PAGE_SIZE));
+        mPdfOptions.setPasswordProtected(false);
+        mImagesUri.clear();
+        mImageCounter = 0;
+        showEnhancementOptions();
+        mNoOfImages.setVisibility(View.GONE);
     }
-
 }

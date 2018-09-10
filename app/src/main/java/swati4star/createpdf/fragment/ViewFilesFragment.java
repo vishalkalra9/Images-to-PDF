@@ -1,14 +1,16 @@
 package swati4star.createpdf.fragment;
 
+import android.Manifest;
 import android.app.Activity;
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.preference.PreferenceManager;
 import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
 import android.support.constraint.ConstraintLayout;
-import android.support.design.widget.Snackbar;
 import android.support.v4.app.Fragment;
 import android.support.v4.app.FragmentManager;
 import android.support.v4.widget.SwipeRefreshLayout;
@@ -25,11 +27,11 @@ import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
+import android.widget.RelativeLayout;
 import android.widget.TextView;
 
 import java.io.File;
 import java.util.ArrayList;
-import java.util.Objects;
 
 import butterknife.BindView;
 import butterknife.ButterKnife;
@@ -46,6 +48,7 @@ import swati4star.createpdf.util.ViewFilesDividerItemDecoration;
 
 import static swati4star.createpdf.util.Constants.SORTING_INDEX;
 import static swati4star.createpdf.util.FileSortUtils.NAME_INDEX;
+import static swati4star.createpdf.util.StringUtils.showSnackbar;
 
 public class ViewFilesFragment extends Fragment
         implements SwipeRefreshLayout.OnRefreshListener, EmptyStateChangeListener {
@@ -53,6 +56,7 @@ public class ViewFilesFragment extends Fragment
     // Directory operations constants
     public static final int NEW_DIR = 1;
     public static final int EXISTING_DIR = 2;
+    private static final int PERMISSION_REQUEST_WRITE_EXTERNAL_STORAGE_RESULT = 10;
 
     @BindView(R.id.layout_main)
     public LinearLayout mainLayout;
@@ -64,6 +68,8 @@ public class ViewFilesFragment extends Fragment
     SwipeRefreshLayout mSwipeView;
     @BindView(R.id.emptyStatusView)
     ConstraintLayout emptyView;
+    @BindView(R.id.no_permissions_view)
+    RelativeLayout noPermissionsLayout;
 
     private MenuItem mMenuItem;
     private Activity mActivity;
@@ -83,8 +89,46 @@ public class ViewFilesFragment extends Fragment
         FragmentManager fragmentManager = getActivity().getSupportFragmentManager();
         fragmentManager.beginTransaction().replace(R.id.content, fragment).commit();
         //Set default item selected
-        if (getActivity() instanceof MainActivity) {
-            ((MainActivity) getActivity()).setDefaultMenuSelected(0);
+        if (mActivity instanceof MainActivity) {
+            ((MainActivity) mActivity).setDefaultMenuSelected(0);
+        }
+    }
+
+    @OnClick(R.id.provide_permissions)
+    public void providePermissions() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            requestPermissions(new String[]{
+                    Manifest.permission.WRITE_EXTERNAL_STORAGE,
+                    Manifest.permission.READ_EXTERNAL_STORAGE,
+                    Manifest.permission.CAMERA},
+                    PERMISSION_REQUEST_WRITE_EXTERNAL_STORAGE_RESULT);
+        }
+    }
+
+    /**
+     * Called after user is asked to grant permissions
+     *
+     * @param requestCode  REQUEST Code for opening permissions
+     * @param permissions  permissions asked to user
+     * @param grantResults bool array indicating if permission is granted
+     */
+    @Override
+    public void onRequestPermissionsResult(int requestCode,
+                                           @NonNull String[] permissions,
+                                           @NonNull int[] grantResults) {
+
+        if (grantResults.length < 1) {
+            showSnackbar(mActivity, R.string.snackbar_insufficient_permissions);
+            return;
+        }
+        switch (requestCode) {
+            case PERMISSION_REQUEST_WRITE_EXTERNAL_STORAGE_RESULT: {
+                if (grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                    showSnackbar(mActivity, R.string.snackbar_permissions_given);
+                    onRefresh();
+                } else
+                    showSnackbar(mActivity, R.string.snackbar_insufficient_permissions);
+            }
         }
     }
 
@@ -137,18 +181,14 @@ public class ViewFilesFragment extends Fragment
         mSearchView.setOnQueryTextListener(new SearchView.OnQueryTextListener() {
             @Override
             public boolean onQueryTextSubmit(String s) {
-                ArrayList<File> searchResult = mDirectoryUtils.searchPDF(s);
-                mViewFilesAdapter.setData(searchResult);
-                mViewFilesListRecyclerView.setAdapter(mViewFilesAdapter);
+                setDataForQueryChange(s);
                 mSearchView.clearFocus();
                 return true;
             }
 
             @Override
             public boolean onQueryTextChange(String s) {
-                ArrayList<File> searchResult = mDirectoryUtils.searchPDF(s);
-                mViewFilesAdapter.setData(searchResult);
-                mViewFilesListRecyclerView.setAdapter(mViewFilesAdapter);
+                setDataForQueryChange(s);
                 return true;
             }
         });
@@ -157,6 +197,12 @@ public class ViewFilesFragment extends Fragment
             return false;
         });
         mSearchView.setIconifiedByDefault(true);
+    }
+
+    private void setDataForQueryChange(String s) {
+        ArrayList<File> searchResult = mDirectoryUtils.searchPDF(s);
+        mViewFilesAdapter.setData(searchResult);
+        mViewFilesListRecyclerView.setAdapter(mViewFilesAdapter);
     }
 
     @Override
@@ -264,6 +310,12 @@ public class ViewFilesFragment extends Fragment
         onRefresh();
         final File[] files = mDirectoryUtils.getOrCreatePdfDirectory().listFiles();
         int count = 0;
+
+        if (files == null) {
+            showNoPermissionsView();
+            return;
+        }
+
         for (File file : files)
             if (!file.isDirectory()) {
                 count++; break;
@@ -279,7 +331,8 @@ public class ViewFilesFragment extends Fragment
     }
 
     private void populatePdfList() {
-        new PopulateList(mActivity, mViewFilesAdapter, this, mCurrentSortingIndex).execute();
+        new PopulateList(mViewFilesAdapter, this,
+                new DirectoryUtils(mActivity), mCurrentSortingIndex).execute();
     }
 
     private void displaySortDialog() {
@@ -300,17 +353,30 @@ public class ViewFilesFragment extends Fragment
         mAlertDialogBuilder.create().show();
     }
 
-
     @Override
     public void setEmptyStateVisible() {
         emptyView.setVisibility(View.VISIBLE);
         mainLayout.setVisibility(View.GONE);
+        noPermissionsLayout.setVisibility(View.GONE);
     }
 
     @Override
     public void setEmptyStateInvisible() {
         emptyView.setVisibility(View.GONE);
         mainLayout.setVisibility(View.VISIBLE);
+        noPermissionsLayout.setVisibility(View.GONE);
+    }
+
+    @Override
+    public void showNoPermissionsView() {
+        emptyView.setVisibility(View.GONE);
+        mainLayout.setVisibility(View.GONE);
+        noPermissionsLayout.setVisibility(View.VISIBLE);
+    }
+
+    @Override
+    public void hideNoPermissionsView() {
+        noPermissionsLayout.setVisibility(View.GONE);
     }
 
     // DIRECTORY OPERATIONS
@@ -370,7 +436,7 @@ public class ViewFilesFragment extends Fragment
                 .setPositiveButton(R.string.ok, (dialogInterface, i) -> {
                     final String dirName = input.getText().toString();
                     final File directory = mDirectoryUtils.getDirectory(dirName);
-                    if (directory == null) {
+                    if (directory == null || dirName.trim().isEmpty()) {
                         showSnack(R.string.dir_does_not_exists);
                     } else {
                         final AlertDialog.Builder builder = new AlertDialog.Builder(mActivity);
@@ -396,10 +462,7 @@ public class ViewFilesFragment extends Fragment
         mAlertDialogBuilder.create().show();
     }
 
-
     private void showSnack(int resID) {
-        Snackbar.make(Objects.requireNonNull(mActivity).findViewById(android.R.id.content),
-                resID, Snackbar.LENGTH_LONG).show();
+        showSnackbar(mActivity, resID);
     }
-
 }

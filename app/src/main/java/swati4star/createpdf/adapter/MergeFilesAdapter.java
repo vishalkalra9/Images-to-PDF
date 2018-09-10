@@ -3,29 +3,34 @@ package swati4star.createpdf.adapter;
 import android.app.Activity;
 import android.support.annotation.NonNull;
 import android.support.v7.widget.RecyclerView;
-import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.ImageView;
 import android.widget.TextView;
 
 import java.util.ArrayList;
 
+import butterknife.BindView;
+import butterknife.ButterKnife;
 import swati4star.createpdf.R;
 import swati4star.createpdf.util.FileUtils;
+import swati4star.createpdf.util.PDFUtils;
 
 public class MergeFilesAdapter extends RecyclerView.Adapter<MergeFilesAdapter.ViewMergeFilesHolder> {
 
-    private ArrayList<String> mFilePaths;
-    private Activity mContext;
-    private FileUtils mFileUtils;
-    private OnClickListener mOnClickListener;
+    private final ArrayList<String> mFilePaths;
+    private final Activity mContext;
+    private final FileUtils mFileUtils;
+    private final OnClickListener mOnClickListener;
+    private final PDFUtils mPDFUtils;
 
     public MergeFilesAdapter(Activity mContext, ArrayList<String> mFilePaths, OnClickListener mOnClickListener) {
         this.mContext = mContext;
         this.mFilePaths = mFilePaths;
         mFileUtils = new FileUtils(mContext);
         this.mOnClickListener = mOnClickListener;
+        mPDFUtils = new PDFUtils(mContext);
     }
 
     @NonNull
@@ -38,8 +43,9 @@ public class MergeFilesAdapter extends RecyclerView.Adapter<MergeFilesAdapter.Vi
 
     @Override
     public void onBindViewHolder(@NonNull ViewMergeFilesHolder holder, int position) {
-        Log.v("adding ", String.valueOf(position));
+        boolean isEncrypted = mPDFUtils.isPDFEncrypted(mFilePaths.get(position));
         holder.mFileName.setText(mFileUtils.getFileName(mFilePaths.get(position)));
+        holder.mEncryptionImage.setVisibility(isEncrypted ? View.VISIBLE : View.INVISIBLE);
     }
 
     @Override
@@ -48,11 +54,14 @@ public class MergeFilesAdapter extends RecyclerView.Adapter<MergeFilesAdapter.Vi
     }
 
     public class ViewMergeFilesHolder extends RecyclerView.ViewHolder implements View.OnClickListener {
+        @BindView(R.id.fileName)
         TextView mFileName;
+        @BindView(R.id.encryptionImage)
+        ImageView mEncryptionImage;
 
         ViewMergeFilesHolder(View itemView) {
             super(itemView);
-            mFileName = itemView.findViewById(R.id.fileName);
+            ButterKnife.bind(this, itemView);
             mFileName.setOnClickListener(this);
         }
 

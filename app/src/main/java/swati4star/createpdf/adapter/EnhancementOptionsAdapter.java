@@ -13,12 +13,12 @@ import java.util.List;
 import butterknife.BindView;
 import butterknife.ButterKnife;
 import swati4star.createpdf.R;
+import swati4star.createpdf.interfaces.OnItemClickListner;
 import swati4star.createpdf.model.EnhancementOptionsEntity;
 
 /**
  * Created by anandparmar on 08/06/18.
  */
-
 public class EnhancementOptionsAdapter
         extends RecyclerView.Adapter<EnhancementOptionsAdapter.EnhancementOptionsViewHolder> {
 
@@ -54,7 +54,6 @@ public class EnhancementOptionsAdapter
 
         @BindView(R.id.option_image)
         ImageView optionImage;
-
         @BindView(R.id.option_name)
         TextView optionName;
 
@@ -68,9 +67,5 @@ public class EnhancementOptionsAdapter
         public void onClick(View view) {
             mOnItemClickListner.onItemClick(getAdapterPosition());
         }
-    }
-
-    public interface OnItemClickListner {
-        void onItemClick(int position);
     }
 }
